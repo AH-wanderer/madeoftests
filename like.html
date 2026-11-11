@@ -25,7 +25,7 @@
   button:hover { border-color:var(--heart); }
   button:active { transform:scale(.96); }
   button:focus-visible { outline:2px solid var(--heart); outline-offset:2px; }
-  button[disabled] { opacity:.6; cursor:wait; }
+  button[disabled] { cursor:default; }
   svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:2; transition:fill .15s ease, stroke .15s ease; }
   button.liked { border-color:var(--heart); background:var(--tint); }
   button.liked svg { fill:var(--heart); stroke:var(--heart); }
@@ -40,64 +40,64 @@
   <span class="count" id="count">–</span>
   <span class="label" id="label">喜歡這篇？按個愛心</span>
 </button>
- 
+
 <script>
   // ── 設定 ─────────────────────────────────────────────
-  // NAMESPACE：改成只屬於你的獨特名稱，避免和別人的計數器撞名。
-  var NAMESPACE = 'a-vision-of-drowl-hearts';
-  var API = 'https://api.counterapi.dev/v1/';
+  // 計數服務：Abacus（免註冊、免金鑰）。
+  // NAMESPACE 請保持唯一（建議用你的網站網域），避免和別人的計數器撞名。
+  var NAMESPACE = 'a-vision-of-drowl.super.site';
+  var API = 'https://abacus.jasoncameron.dev/';
   // ────────────────────────────────────────────────────
- 
-  // 每個頁面用網址的 ?id=... 區分，例如 like.html?id=電影評論-星際效應
+  // 注意：Abacus 的公開端點只能「加一」，不能減一，所以愛心按下後就不能取消。
+
+  // 每個頁面用網址的 ?id=... 區分，例如 like.html?id=2f31fe12a9c480ba9892f819b1759540
   var params = new URLSearchParams(location.search);
-  var id = (params.get('id') || 'default').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff_-]+/g, '-').slice(0, 100);
- 
+  var id = (params.get('id') || 'default').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').slice(0, 100);
+
   var btn = document.getElementById('btn');
   var countEl = document.getElementById('count');
   var labelEl = document.getElementById('label');
   var storageKey = 'heart:' + NAMESPACE + ':' + id;
-  var liked = false, count = 0, busy = false;
- 
+  var liked = false, count = 0, busy = false, failed = false;
+
   try { liked = localStorage.getItem(storageKey) === '1'; } catch (e) {}
- 
+
   function url(action) {
-    return API + encodeURIComponent(NAMESPACE) + '/' + encodeURIComponent(id) + '/' + (action || '');
-  }
-  function readCount(data) {
-    if (!data) return 0;
-    var n = data.count !== undefined ? data.count : data.value;
-    return Number(n) || 0;
+    return API + action + '/' + encodeURIComponent(NAMESPACE) + '/' + encodeURIComponent(id);
   }
   function paint() {
     btn.classList.toggle('liked', liked);
     btn.setAttribute('aria-pressed', liked ? 'true' : 'false');
+    btn.disabled = liked || busy;
     countEl.textContent = count;
-    labelEl.textContent = liked ? '謝謝你的愛心' : '喜歡這篇？按個愛心';
+    labelEl.textContent = failed ? '暫時無法連線，稍後再試' : (liked ? '謝謝你的愛心' : '喜歡這篇？按個愛心');
   }
- 
-  // 讀取目前愛心數（計數器尚未建立時視為 0）
-  fetch(url(''))
-    .then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (d) { count = readCount(d); paint(); })
+
+  // 讀取目前愛心數；404 代表還沒有人按過，視為 0
+  fetch(url('get'), { cache: 'no-store' })
+    .then(function (r) {
+      if (r.status === 404) return { value: 0 };
+      if (!r.ok) throw new Error(r.status);
+      return r.json();
+    })
+    .then(function (d) { count = Number(d.value) || 0; paint(); })
     .catch(function () { count = 0; paint(); });
- 
+
   btn.addEventListener('click', function () {
-    if (busy) return;
-    busy = true; btn.disabled = true;
-    var action = liked ? 'down' : 'up';
-    fetch(url(action))
+    if (busy || liked) return;
+    busy = true; failed = false; paint();
+    fetch(url('hit'), { cache: 'no-store' })
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function (d) {
-        liked = !liked;
-        count = Math.max(0, readCount(d));
-        try { liked ? localStorage.setItem(storageKey, '1') : localStorage.removeItem(storageKey); } catch (e) {}
+        liked = true;
+        count = Number(d.value) || count + 1;
+        try { localStorage.setItem(storageKey, '1'); } catch (e) {}
       })
-      .catch(function () { labelEl.textContent = '暫時無法連線，稍後再試'; })
-      .then(function () { busy = false; btn.disabled = false; if (labelEl.textContent.indexOf('無法') === -1) paint(); });
+      .catch(function () { failed = true; })
+      .then(function () { busy = false; paint(); });
   });
- 
+
   paint();
 </script>
 </body>
 </html>
- 
