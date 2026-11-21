@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>愛心</title>
+<link rel="preconnect" href="https://abacus.jasoncameron.dev" crossorigin>
 <style>
   :root { --fg:#37352f; --muted:#8a8780; --line:#d9d6cf; --heart:#e0556b; --tint:rgba(224,85,107,.1); }
   @media (prefers-color-scheme: dark) {
@@ -43,57 +44,90 @@
 
 <script>
   // ── 設定 ─────────────────────────────────────────────
-  // 計數服務：Abacus（免註冊、免金鑰）。
-  // NAMESPACE 請保持唯一（建議用你的網站網域），避免和別人的計數器撞名。
-  var NAMESPACE = 'a-vision-of-drowl.super.site';
-  var API = 'https://abacus.jasoncameron.dev/';
+  var NAMESPACE = 'a-vision-of-drowl.super.site';   // 計數器命名空間（保持唯一）
+  var API = 'https://abacus.jasoncameron.dev/';      // Abacus：免註冊、免金鑰
   // ────────────────────────────────────────────────────
-  // 注意：Abacus 的公開端點只能「加一」，不能減一，所以愛心按下後就不能取消。
+  // Abacus 公開端點只能「加一」，所以愛心按下後不能取消。
+  // 測試用：網址後面加 &reset=1 可清除這個瀏覽器的「已按過」紀錄。
 
-  // 每個頁面用網址的 ?id=... 區分，例如 like.html?id=2f31fe12a9c480ba9892f819b1759540
   var params = new URLSearchParams(location.search);
   var id = (params.get('id') || 'default').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').slice(0, 100);
 
   var btn = document.getElementById('btn');
   var countEl = document.getElementById('count');
   var labelEl = document.getElementById('label');
-  var storageKey = 'heart:' + NAMESPACE + ':' + id;
-  var liked = false, count = 0, busy = false, failed = false;
+  var likedKey = 'heart:' + NAMESPACE + ':' + id;
+  var countKey = 'heartcount:' + NAMESPACE + ':' + id;
 
-  try { liked = localStorage.getItem(storageKey) === '1'; } catch (e) {}
+  function store(op, key, val) {
+    try {
+      if (op === 'get') return localStorage.getItem(key);
+      if (op === 'set') localStorage.setItem(key, val);
+      if (op === 'del') localStorage.removeItem(key);
+    } catch (e) {}
+    return null;
+  }
+
+  if (params.get('reset') === '1') { store('del', likedKey); store('del', countKey); }
+
+  var liked = store('get', likedKey) === '1';
+  var cached = store('get', countKey);
+  var count = cached === null ? null : (Number(cached) || 0);   // null = 還不知道
+  var busy = false, errorText = '';
 
   function url(action) {
     return API + action + '/' + encodeURIComponent(NAMESPACE) + '/' + encodeURIComponent(id);
   }
+  function shown() {
+    if (count === null) return liked ? 1 : null;
+    return liked ? Math.max(count, 1) : count;   // 已按過的人，至少看得到自己的那一顆
+  }
   function paint() {
+    var n = shown();
     btn.classList.toggle('liked', liked);
     btn.setAttribute('aria-pressed', liked ? 'true' : 'false');
-    btn.disabled = liked || busy;
-    countEl.textContent = count;
-    labelEl.textContent = failed ? '暫時無法連線，稍後再試' : (liked ? '謝謝你的愛心' : '喜歡這篇？按個愛心');
+    btn.disabled = liked;
+    countEl.textContent = n === null ? '–' : n;
+    labelEl.textContent = errorText || (liked ? '謝謝你的愛心' : '喜歡這篇？按個愛心');
   }
 
-  // 讀取目前愛心數；404 代表還沒有人按過，視為 0
-  fetch(url('get'), { cache: 'no-store' })
+  // 讀取目前愛心數：加上時間參數避免讀到被暫存的舊結果；404 代表還沒有人按過
+  fetch(url('get') + '?t=' + Date.now(), { cache: 'no-store' })
     .then(function (r) {
       if (r.status === 404) return { value: 0 };
-      if (!r.ok) throw new Error(r.status);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
     })
-    .then(function (d) { count = Number(d.value) || 0; paint(); })
-    .catch(function () { count = 0; paint(); });
+    .then(function (d) {
+      if (busy) return;                      // 正在送出愛心時，不要被舊結果蓋掉
+      count = Number(d.value) || 0;
+      store('set', countKey, count);
+      paint();
+    })
+    .catch(function () { paint(); });
 
   btn.addEventListener('click', function () {
     if (busy || liked) return;
-    busy = true; failed = false; paint();
-    fetch(url('hit'), { cache: 'no-store' })
-      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    // 先立刻更新畫面，不等伺服器回應
+    busy = true; errorText = '';
+    var before = count;
+    liked = true;
+    count = (count === null ? 0 : count) + 1;
+    store('set', likedKey, '1');
+    paint();
+
+    fetch(url('hit') + '?t=' + Date.now(), { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then(function (d) {
-        liked = true;
-        count = Number(d.value) || count + 1;
-        try { localStorage.setItem(storageKey, '1'); } catch (e) {}
+        if (typeof d.value === 'number') count = d.value;
+        store('set', countKey, count);
       })
-      .catch(function () { failed = true; })
+      .catch(function (e) {
+        // 送出失敗：還原，並顯示錯誤原因
+        liked = false; count = before;
+        store('del', likedKey);
+        errorText = '送出失敗（' + (e && e.message && e.message.indexOf('HTTP') === 0 ? e.message : '連線被擋或中斷') + '），請再按一次';
+      })
       .then(function () { busy = false; paint(); });
   });
 
